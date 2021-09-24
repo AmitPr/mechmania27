@@ -22,6 +22,18 @@ logger = Logger()
 constants = Constants()
 
 
+def move_toward_tile(current: Position, target: Position, max_steps: int) -> Position:
+    """
+    Returns a position that is closer to the target position.
+    """
+    if current.distance(target) <= max_steps:
+        return target
+    else:
+        direction = target-current
+        direction = direction.clamp_magnitude(max_steps)
+        return current + direction
+
+
 def get_move_decision(game: Game) -> MoveDecision:
     """
     Returns a move decision for the turn given the current game state.
@@ -37,7 +49,8 @@ def get_move_decision(game: Game) -> MoveDecision:
     :returns: MoveDecision A location for the bot to move to this turn
     """
     game_state: GameState = game.get_game_state()
-    logger.debug(f"[Turn {game_state.turn}] Feedback received from engine: {game_state.feedback}")
+    logger.debug(
+        f"[Turn {game_state.turn}] Feedback received from engine: {game_state.feedback}")
 
     # Select your decision here!
     my_player: Player = game_state.get_my_player()
@@ -45,11 +58,12 @@ def get_move_decision(game: Game) -> MoveDecision:
     logger.info(f"Currently at {my_player.position}")
 
     # If we have something to sell that we harvested, then try to move towards the green grocer tiles
-    if random.random() < 0.5 and \
-            (sum(my_player.seed_inventory.values()) == 0 or
+    if (sum(my_player.seed_inventory.values()) == 0 or
              len(my_player.harvested_inventory)):
         logger.debug("Moving towards green grocer")
-        decision = MoveDecision(Position(constants.BOARD_WIDTH // 2, max(0, pos.y - constants.MAX_MOVEMENT)))
+        pos = move_toward_tile(pos, Position(constants.BOARD_WIDTH // 2, 0), constants.MAX_MOVEMENT)
+        logger.debug(f"MoveDecision: {pos.engine_str()}")
+        decision = MoveDecision(pos)
     # If not, then move randomly within the range of locations we can move to
     else:
         pos = random.choice(game_util.within_move_range(game_state, my_player.name))
@@ -138,3 +152,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def get_max_x_from_market(self) -> Position:  # TODO: Move one turn from market (or similar for multiple turns)
+    
+    pass

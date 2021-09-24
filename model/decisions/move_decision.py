@@ -3,7 +3,7 @@ from model.position import Position
 
 class MoveDecision:
     def __init__(self, pos: Position) -> None:
-        self.pos = pos
+        self.pos = pos.round()
 
     def __str__(self) -> str:
         return f"MoveDecision({self.pos})"
