@@ -23,7 +23,7 @@ class Position:
         return (self.x, self.y) == object.getpos()
 
     def __str__(self) -> str:
-        return f"({int(self.x)},{int(self.y)})"
+        return f"({self.x},{self.y})"
 
     def engine_str(self) -> str:
         return f"{int(self.x)} {int(self.y)}"
@@ -47,7 +47,7 @@ class Position:
         return abs(self.x - other.x) + abs(self.y - other.y)
 
     def magnitude(self):
-        return math.sqrt(self.x**2 + self.y**2)
+        return abs(self.x) + abs(self.y)
     
     def normalize(self):
         mag = self.magnitude()
@@ -57,6 +57,7 @@ class Position:
         return Position(int(self.x//1), int(self.y//1))
     
     def clamp_magnitude(self, max_magnitude):
-        if self.magnitude() > max_magnitude:
-            return (self.normalize() * max_magnitude).round()
+        mag = self.magnitude()
+        if mag > max_magnitude:
+            return self.normalize() * max_magnitude
         return self

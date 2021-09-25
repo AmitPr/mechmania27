@@ -17,9 +17,19 @@ from model.player import Player
 from api.constants import Constants
 
 import random
+import math
 
 logger = Logger()
 constants = Constants()
+
+
+class BotState:
+    def __init__(self) -> None:
+        self.has_visited_grocer = False
+        self.waiting_for_plants = False
+
+
+state = BotState()
 
 
 def move_toward_tile(current: Position, target: Position, max_steps: int) -> Position:
@@ -30,20 +40,36 @@ def move_toward_tile(current: Position, target: Position, max_steps: int) -> Pos
         return target
     else:
         direction = target-current
-        direction = direction.clamp_magnitude(max_steps)
-        return current + direction
+        new_direction = direction.clamp_magnitude(max_steps)
+        target_pos = current + new_direction
+
+        if target_pos.x > current.x:
+            target_pos.x = math.floor(target_pos.x)
+        else:
+            target_pos.x = math.ceil(target_pos.x)
+        if target_pos.y > current.y:
+            target_pos.y = math.floor(target_pos.y)
+        else:
+            target_pos.y = math.ceil(target_pos.y)
+
+        return target_pos
+
+
+# TODO: Move one turn from market (or similar for multiple turns)
+def move_from_market(my_player: Player, game: Game) -> Position:
+    player_pos = my_player.position
+    if game.get_game_state().tile_map.get_tile(player_pos) == TileType.GREEN_GROCER:
+        if my_player.player_num == 1:
+            return player_pos + (-7, 3)
+        else:
+            return player_pos + (7, 3)
+    else:
+        return player_pos + move_toward_tile(player_pos, (15, 0), constants.MAX_MOVEMENT)
 
 
 def get_move_decision(game: Game) -> MoveDecision:
     """
     Returns a move decision for the turn given the current game state.
-    This is part 1 of 2 of the turn.
-
-    Remember, you can only sell crops once you get to a Green Grocer tile,
-    and you can only harvest or plant within your harvest or plant radius.
-
-    After moving (and submitting the move decision), you will be given a new
-    game state with both players in their updated positions.
 
     :param: game The object that contains the game state and other related information
     :returns: MoveDecision A location for the bot to move to this turn
@@ -56,19 +82,30 @@ def get_move_decision(game: Game) -> MoveDecision:
     my_player: Player = game_state.get_my_player()
     pos: Position = my_player.position
     logger.info(f"Currently at {my_player.position}")
-
+    # logger.debug(f"LENGHTLENGHTLENGHTLENGHT: {len(my_player.harvested_inventory)}")
     # If we have something to sell that we harvested, then try to move towards the green grocer tiles
-    if (sum(my_player.seed_inventory.values()) == 0 or
-             len(my_player.harvested_inventory)):
-        logger.debug("Moving towards green grocer")
-        pos = move_toward_tile(pos, Position(constants.BOARD_WIDTH // 2, 0), constants.MAX_MOVEMENT)
-        logger.debug(f"MoveDecision: {pos.engine_str()}")
+    if state.waiting_for_plants:
+        logger.debug("Waiting for plants to grow")
         decision = MoveDecision(pos)
-    # If not, then move randomly within the range of locations we can move to
+    elif (not state.has_visited_grocer) or (len(my_player.harvested_inventory) > 0 or game_state.turn > 174):
+        logger.debug(f"Moving towards green grocer")
+        pos = move_toward_tile(pos, Position(
+            constants.BOARD_WIDTH // 2, 0), constants.MAX_MOVEMENT)
+        decision = MoveDecision(pos)
     else:
-        pos = random.choice(game_util.within_move_range(game_state, my_player.name))
-        logger.debug("Moving randomly")
-        decision = MoveDecision(pos)
+        target_y = game_state.tile_map.get_fertility_band_level(
+            TileType.F_BAND_INNER)
+        if target_y != -1 and len(my_player.seed_inventory) > 0:
+            logger.debug("Moving towards fertile band")
+            pos = move_toward_tile(pos, Position(
+                pos.x, target_y), constants.MAX_MOVEMENT)
+            decision = MoveDecision(pos)
+        else:
+            logger.debug("Not moving")
+            if game_state.turn < 5:
+                decision = MoveDecision(Position(pos.x, 1))
+            else:
+                decision = MoveDecision(pos)
 
     logger.debug(f"[Turn {game_state.turn}] Sending MoveDecision: {decision}")
     return decision
@@ -77,57 +114,63 @@ def get_move_decision(game: Game) -> MoveDecision:
 def get_action_decision(game: Game) -> ActionDecision:
     """
     Returns an action decision for the turn given the current game state.
-    This is part 2 of 2 of the turn.
 
     There are multiple action decisions that you can return here: BuyDecision,
     HarvestDecision, PlantDecision, or UseItemDecision.
-
-    After this action, the next turn will begin.
 
     :param: game The object that contains the game state and other related information
     :returns: ActionDecision A decision for the bot to make this turn
     """
     game_state: GameState = game.get_game_state()
-    logger.debug(f"[Turn {game_state.turn}] Feedback received from engine: {game_state.feedback}")
+    logger.debug(
+        f"[Turn {game_state.turn}] Feedback received from engine: {game_state.feedback}")
 
-    # Select your decision here!
     my_player: Player = game_state.get_my_player()
     pos: Position = my_player.position
+    seeds = sum(my_player.seed_inventory.values())
     # Let the crop of focus be the one we have a seed for, if not just choose a random crop
-    crop = max(my_player.seed_inventory, key=my_player.seed_inventory.get) \
-        if sum(my_player.seed_inventory.values()) > 0 else random.choice(list(CropType))
+    crop = CropType.DUCHAM_FRUIT
 
     # Get a list of possible harvest locations for our harvest radius
     possible_harvest_locations = []
-    harvest_radius = my_player.harvest_radius
     for harvest_pos in game_util.within_harvest_range(game_state, my_player.name):
-        if game_state.tile_map.get_tile(harvest_pos.x, harvest_pos.y).crop.value > 0:
+        if game_state.tile_map.get_tile(harvest_pos).turns_left_to_grow == 0 \
+                and game_state.tile_map.get_tile(harvest_pos).crop.value > 0:
             possible_harvest_locations.append(harvest_pos)
-
-    logger.debug(f"Possible harvest locations={possible_harvest_locations}")
 
     # If we can harvest something, try to harvest it
     if len(possible_harvest_locations) > 0:
-        decision = HarvestDecision(possible_harvest_locations)
-    # If not but we have that seed, then try to plant it in a fertility band
-    elif my_player.seed_inventory[crop] > 0 and \
-            game_state.tile_map.get_tile(pos.x, pos.y).type != TileType.GREEN_GROCER and \
-            game_state.tile_map.get_tile(pos.x, pos.y).type.value >= TileType.F_BAND_OUTER.value:
+        state.waiting_for_plants = False
+        return HarvestDecision(possible_harvest_locations)
+    # If not but we have that seed, then try to plant it in an inner fertility band
+    if game_state.tile_map.get_tile(pos).type.value > TileType.F_BAND_OUTER.value\
+            and seeds > 0 and not state.waiting_for_plants:
         logger.debug(f"Deciding to try to plant at position {pos}")
-        decision = PlantDecision([crop], [pos])
-    # If we don't have that seed, but we have the money to buy it, then move towards the
-    # green grocer to buy it
-    elif my_player.money >= crop.get_seed_price() and \
-        game_state.tile_map.get_tile(pos.x, pos.y).type == TileType.GREEN_GROCER:
-        logger.debug(f"Buy 1 of {crop}")
-        decision = BuyDecision([crop], [1])
-    # If we can't do any of that, then just do nothing (move around some more)
-    else:
-        logger.debug(f"Couldn't find anything to do, waiting for move step")
-        decision = DoNothingDecision()
+        possible_plant_locations: list[Position] = [Position(0, 0), Position(
+            1, 0), Position(-1, 0), Position(0, 1), Position(0, -1)]
+        chosen_plant_locations: list[Position] = []
+        for i in range(seeds):
+            for j in possible_plant_locations:
+                loc = pos + j
+                if not game_state.tile_map.valid_position(loc) or game_state.get_opponent_player().position.distance(loc) < 3:
+                    possible_plant_locations.remove(j)
+                    continue
+                if game_state.tile_map.get_tile(loc).type.value > TileType.F_BAND_OUTER.value:
+                    chosen_plant_locations.append(loc)
+                    possible_plant_locations.remove(j)
+                    break
+        state.waiting_for_plants = True
+        return PlantDecision([crop]*len(chosen_plant_locations), chosen_plant_locations)
 
-    logger.debug(f"[Turn {game_state.turn}] Sending ActionDecision: {decision}")
-    return decision
+    if my_player.money >= crop.get_seed_price() and \
+            game_state.tile_map.get_tile(pos).type == TileType.GREEN_GROCER:
+        logger.debug(
+            f"Buy as much as we can of {crop}")
+        state.has_visited_grocer = True
+        return BuyDecision([crop], [min(my_player.money // crop.get_seed_price(), 5-seeds)])
+
+    logger.debug(f"Couldn't find anything to do, waiting for move step")
+    return DoNothingDecision()
 
 
 def main():
@@ -152,7 +195,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-def get_max_x_from_market(self) -> Position:  # TODO: Move one turn from market (or similar for multiple turns)
-    
-    pass
