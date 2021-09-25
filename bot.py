@@ -1,3 +1,4 @@
+from model.decisions.use_item_decision import UseItemDecision
 from networking.io import Logger
 from game import Game
 from api import game_util
@@ -27,6 +28,8 @@ class BotState:
     def __init__(self) -> None:
         self.has_visited_grocer = False
         self.waiting_for_plants = False
+        self.has_used_item = False
+        self.is_using_coffee_thermos = False
 
 
 state = BotState()
@@ -82,6 +85,14 @@ def get_move_decision(game: Game) -> MoveDecision:
     my_player: Player = game_state.get_my_player()
     pos: Position = my_player.position
     logger.info(f"Currently at {my_player.position}")
+
+    distance_from_opponent = get_distance_from_opponent(my_player, game)
+    if (distance_from_opponent > constants.MAX_MOVEMENT):
+        state.is_using_coffee_thermos = True  # TODO: Check if coffee thermos is already used
+    pos = move_toward_tile(pos, get_opponent_pos(), constants.MAX_MOVEMENT)
+    decision = MoveDecision(pos)
+
+    """
     # logger.debug(f"LENGHTLENGHTLENGHTLENGHT: {len(my_player.harvested_inventory)}")
     # If we have something to sell that we harvested, then try to move towards the green grocer tiles
     if state.waiting_for_plants:
@@ -106,10 +117,16 @@ def get_move_decision(game: Game) -> MoveDecision:
                 decision = MoveDecision(Position(pos.x, 1))
             else:
                 decision = MoveDecision(pos)
-
+    """
     logger.debug(f"[Turn {game_state.turn}] Sending MoveDecision: {decision}")
     return decision
 
+def get_opponent_pos(game: Game) -> Position:
+    opponent_player = game.get_game_state.get_opponent_player()
+    return opponent_player.position
+
+def get_distance_from_opponent(my_player: Player, game: Game) -> int:
+    return my_player.distance(get_opponent_pos(game))
 
 def get_action_decision(game: Game) -> ActionDecision:
     """
@@ -138,10 +155,17 @@ def get_action_decision(game: Game) -> ActionDecision:
                 and game_state.tile_map.get_tile(harvest_pos).crop.value > 0:
             possible_harvest_locations.append(harvest_pos)
 
+    if state.is_using_coffee_thermos and not state.has_used_item:
+        state.is_using_coffee_thermos = False
+        state.has_used_item = True
+        return UseItemDecision()
+
     # If we can harvest something, try to harvest it
     if len(possible_harvest_locations) > 0:
         state.waiting_for_plants = False
         return HarvestDecision(possible_harvest_locations)
+
+    """
     # If not but we have that seed, then try to plant it in an inner fertility band
     if game_state.tile_map.get_tile(pos).type.value > TileType.F_BAND_OUTER.value\
             and seeds > 0 and not state.waiting_for_plants:
@@ -168,6 +192,7 @@ def get_action_decision(game: Game) -> ActionDecision:
             f"Buy as much as we can of {crop}")
         state.has_visited_grocer = True
         return BuyDecision([crop], [min(my_player.money // crop.get_seed_price(), 5-seeds)])
+    """
 
     logger.debug(f"Couldn't find anything to do, waiting for move step")
     return DoNothingDecision()
@@ -177,7 +202,7 @@ def main():
     """
     Competitor TODO: choose an item and upgrade for your bot
     """
-    game = Game(ItemType.COFFEE_THERMOS, UpgradeType.SCYTHE)
+    game = Game(ItemType.COFFEE_THERMOS, UpgradeType.LONGER_LEGS)
 
     while (True):
         try:
