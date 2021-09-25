@@ -90,15 +90,15 @@ def get_move_decision(game: Game) -> MoveDecision:
     elif (not state.has_visited_grocer) or (len(my_player.harvested_inventory) > 0 or game_state.turn > 174):
         logger.debug(f"Moving towards green grocer")
         pos = move_toward_tile(pos, Position(
-            constants.BOARD_WIDTH // 2, 0), constants.MAX_MOVEMENT)
+            constants.BOARD_WIDTH // 2, 0), constants.MAX_MOVEMENT)  # TODO: Check if closer to market sides
         decision = MoveDecision(pos)
     else:
         target_y = game_state.tile_map.get_fertility_band_level(
             TileType.F_BAND_INNER)
         if target_y != -1 and len(my_player.seed_inventory) > 0:
             logger.debug("Moving towards fertile band")
-            pos = move_toward_tile(pos, Position(
-                pos.x, target_y), constants.MAX_MOVEMENT)
+            pos = move_toward_tile(pos, get_nearest_fertile_area(pos.x, target_y, my_player, game), constants.MAX_MOVEMENT)
+            # pos = move_toward_tile(pos, Position(pos.x, target_y), constants.MAX_MOVEMENT)
             decision = MoveDecision(pos)
         else:
             logger.debug("Not moving")
@@ -110,6 +110,37 @@ def get_move_decision(game: Game) -> MoveDecision:
     logger.debug(f"[Turn {game_state.turn}] Sending MoveDecision: {decision}")
     return decision
 
+def get_nearest_fertile_area(ideal_planting_pos: Position, my_player: Player, game: Game) -> Position:  # Plus-shaped 5 tile area
+    player_pos = my_player.position
+    tile_map = game.get_game_state().tile_map
+
+    # Ensures a plus area can be planted on
+    if ideal_planting_pos.y <= 3:
+        ideal_planting_pos.y = 4
+    elif ideal_planting_pos.y >= constants.BOARD_HEIGHT - 1:  
+        ideal_planting_pos.y = constants.BOARD_HEIGHT - 2
+    
+    min_distance = constants.BOARD_HEIGHT + constants.BOARD_WIDTH
+    relative_poses = [Position(-1, 0), Position(0, 0), Position(1, 0), Position(0, -1), Position(0, 1)]
+    for x in range(1, constants.BOARD_WIDTH - 1):
+        is_x_area_fertile = True
+        for pos in relative_poses:
+            if not is_unobstructed(player_pos + pos, game):
+                is_x_area_fertile = False
+        if is_x_area_fertile:
+            distance = player_pos.distance(Position(x, ideal_planting_pos.y))
+            if distance < min_distance:
+                min_distance = distance
+    return min_distance
+
+def is_unobstructed(tile_pos: Position, game: Game) -> bool:
+    opponent_player = game.get_game_state.get_opponent_player()
+    opponent_protection_distance = 2
+    if opponent_player.upgrade == UpgradeType.SPYGLASS:
+        opponent_protection_distance = 3
+    if tile_pos.distance(opponent_player.position) <= opponent_protection_distance:
+        return False
+    return True
 
 def get_action_decision(game: Game) -> ActionDecision:
     """
