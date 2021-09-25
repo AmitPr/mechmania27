@@ -18,9 +18,9 @@ class Position:
     def __eq__(self, o: object) -> bool:
         if object is None:
             return False
-        if type(object) != type(self):
+        if not isinstance(o, Position):
             return False
-        return (self.x, self.y) == object.getpos()
+        return self.x == o.x and self.y == o.y
 
     def __str__(self) -> str:
         return f"({self.x},{self.y})"
@@ -61,3 +61,6 @@ class Position:
         if mag > max_magnitude:
             return self.normalize() * max_magnitude
         return self
+
+    def __hash__(self):
+        return hash((self.x, self.y))

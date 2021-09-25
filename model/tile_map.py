@@ -32,7 +32,10 @@ class TileMap:
         :param: search_direction: The direction to search in. -1 is from the bottom up, 1 is from the top down.
         :return: The level of the target_type in the fertility band.
         """
-        for y, row in reversed(list(enumerate(self.tiles))):
+        rows = list(enumerate(self.tiles))
+        if search_direction == -1:
+            rows.reverse()
+        for y, row in rows:
             if row[0].type == target_type:
                 return y
         return -1

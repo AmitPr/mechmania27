@@ -40,59 +40,57 @@ def get_player_from_name(game_state: GameState, name: str) -> Player:
     return game_state.player1 if game_state.player1.name == name else game_state.player2
 
 
-def within_move_range(game_state: GameState, name: str) -> List[Position]:
+def within_move_range(game_state: GameState, my_player: Player, start_pos: Position) -> List[Position]:
     """
     Returns all tiles for which player of input name can go to
     :param game_state: GameState containing information for the game
     :param name: Name of player to get
     :return: List of positions that the player can move to
     """
-    my_player = get_player_from_name(game_state, name)
     speed = my_player.max_movement
     res = []
 
-    for i in range(my_player.position.y - speed, my_player.position.y + speed):
-        leftover_travel = max(0, speed - abs(my_player.position.y - i));
-        for j in range(my_player.position.x - leftover_travel, my_player.position.x + leftover_travel):
+    for i in range(start_pos.y - speed, start_pos.y + speed):
+        leftover_travel = max(0, speed - abs(start_pos.y - i))
+        for j in range(start_pos.x - leftover_travel, start_pos.x + leftover_travel):
             pos = Position(j, i)
             if valid_position(pos):
                 res.append(pos)
     return res
 
 
-def within_harvest_range(game_state: GameState, name: str) -> List[Position]:
+def within_harvest_range(game_state: GameState, my_player: Player) -> List[Position]:
     """
     Returns all tiles for which player of input name can go to
     :param game_state: GameState containing information for the game
     :param name: Name of player to get
     :return: List of positions that the player can harvest
     """
-    my_player = get_player_from_name(game_state, name)
     radius = my_player.harvest_radius
     res = []
 
     for i in range(my_player.position.y - radius, my_player.position.y + radius + 1):
         for j in range(my_player.position.x - radius, my_player.position.x + radius + 1):
             pos = Position(j, i)
-            if my_player.position.distance(pos)<radius and valid_position(pos):
+            if my_player.position.distance(pos) <= radius and valid_position(pos):
                 res.append(pos)
     return res
 
-def within_plant_range(game_state: GameState, name: str) -> List[Position]:
+
+def within_plant_range(game_state: GameState, my_player: Player) -> List[Position]:
     """
     Returns all tiles for which player of input name can go to
     :param game_state: GameState containing information for the game
     :param name: Name of player to get
     :return: List of positions that the player can harvest
     """
-    my_player = get_player_from_name(game_state, name)
     radius = my_player.plant_radius
     res = []
 
     for i in range(my_player.position.y - radius, my_player.position.y + radius + 1):
         for j in range(my_player.position.x - radius, my_player.position.x + radius + 1):
             pos = Position(j, i)
-            if distance(my_player.position, pos) <= my_player.harvest_radius and valid_position(pos):
+            if my_player.position.distance(pos) <= radius and valid_position(pos):
                 res.append(pos)
     return res
 
@@ -106,8 +104,9 @@ def tile_type_on_turn(turn: int, game_state: GameState, coord: Position) -> Tile
     :param coord: Coordinate to check at
     :return: TileType corresponding to the tile type of the tile given by coord
     """
-    shifts = (turn - 1 - constants.F_BAND_INIT_DELAY) / constants.F_BAND_MOVE_DELAY;
-    shifts = max(0, shifts);
+    shifts = (turn - 1 - constants.F_BAND_INIT_DELAY) / \
+        constants.F_BAND_MOVE_DELAY
+    shifts = max(0, shifts)
 
     row = coord.y
     newType = TileType.ARID
@@ -115,7 +114,7 @@ def tile_type_on_turn(turn: int, game_state: GameState, coord: Position) -> Tile
     # Offset records how far into the fertility zone a row is (negative indicates below)
     # Init position indicates the first row that will * become * part of a band after the first shift
     # e.g. 0 = > fertility band starts off the map while 1 = > fertility band starts with 1 row on the map int
-    offset = shifts - row - 1 + constants.F_BAND_INIT_POSITION;
+    offset = shifts - row - 1 + constants.F_BAND_INIT_POSITION
     if (offset < 0):
         # Below fertility band
         newType = TileType.SOIL

@@ -1,3 +1,4 @@
+from enum import Enum
 from networking.io import Logger
 from game import Game
 from api import game_util
@@ -23,13 +24,29 @@ logger = Logger()
 constants = Constants()
 
 
+class BotMode(Enum):
+    MOVING_TO_BAND = 1
+    PLANTING = 2
+    WAITING_FOR_PLANTS = 3
+    HARVESTING = 4
+    MOVING_TO_MARKET = 5
+    BUYING = 6
+
+
 class BotState:
     def __init__(self) -> None:
         self.has_visited_grocer = False
         self.waiting_for_plants = False
+        self.target_crop = CropType.DUCHAM_FRUIT
+        self.planted_crops: dict[Position, int] = {}
+        self.mode = BotMode.MOVING_TO_MARKET
+
+    def update_planted_crop_timers(self):
+        for position, timer in self.planted_crops.items():
+            self.planted_crops[position] = timer - 1
 
 
-state = BotState()
+state: BotState = BotState()
 
 
 def move_toward_tile(current: Position, target: Position, max_steps: int) -> Position:
@@ -55,16 +72,58 @@ def move_toward_tile(current: Position, target: Position, max_steps: int) -> Pos
         return target_pos
 
 
-# TODO: Move one turn from market (or similar for multiple turns)
-def move_from_market(my_player: Player, game: Game) -> Position:
+def in_range_of_duchams(game_state: GameState) -> bool:
+    for harvest_pos in game_util.within_harvest_range(game_state, game_state.get_my_player()):
+        if game_state.tile_map.get_tile(harvest_pos).crop.type == state.target_crop:
+            return True
+    return False
+
+
+# Plus-shaped 5 tile area
+def get_nearest_fertile_area(ideal_planting_pos: Position, my_player: Player, game: Game) -> Position:
     player_pos = my_player.position
-    if game.get_game_state().tile_map.get_tile(player_pos) == TileType.GREEN_GROCER:
-        if my_player.player_num == 1:
-            return player_pos + (-7, 3)
-        else:
-            return player_pos + (7, 3)
+
+    # Ensures a plus area can be planted on
+    if ideal_planting_pos.y <= 3:
+        ideal_planting_pos.y = 4
+    elif ideal_planting_pos.y >= constants.BOARD_HEIGHT - 1:
+        ideal_planting_pos.y = constants.BOARD_HEIGHT - 2
+
+    min_distance = constants.BOARD_HEIGHT + constants.BOARD_WIDTH
+    min_position = ideal_planting_pos
+    relative_poses = [Position(-1, 0), Position(0, 0),
+                      Position(1, 0), Position(0, -1), Position(0, 1)]
+    for x in range(1, constants.BOARD_WIDTH - 1):
+        is_x_unobstructed = True
+        loc = Position(x, ideal_planting_pos.y)
+        for pos in relative_poses:
+            if is_unobstructed(loc + pos, game):
+                continue
+            is_x_unobstructed = False
+        if is_x_unobstructed:
+            distance = ideal_planting_pos.distance(Position(x, ideal_planting_pos.y))
+            if distance < min_distance:
+                min_distance = distance
+                min_position = loc
+    return min_position
+
+
+def is_unobstructed(tile_pos: Position, game: Game) -> bool:
+    if game.game_state.tile_map.get_tile(tile_pos).crop.type != "NONE":
+        return False
+    opponent_player = game.get_game_state().get_opponent_player()
+    if tile_pos.distance(opponent_player.position) <= opponent_player.protection_radius:
+        return False
+    return True
+
+def closest_market_position(pos: Position) -> Position:
+    if pos.x in (13, 14, 15, 16, 17):
+        target_x = pos.x
     else:
-        return player_pos + move_toward_tile(player_pos, (15, 0), constants.MAX_MOVEMENT)
+        target_x = sorted([13, pos.x, 17])[1]
+    target_y = 0
+    target_pos = Position(target_x, target_y)
+    return target_pos
 
 
 def get_move_decision(game: Game) -> MoveDecision:
@@ -74,31 +133,106 @@ def get_move_decision(game: Game) -> MoveDecision:
     :param: game The object that contains the game state and other related information
     :returns: MoveDecision A location for the bot to move to this turn
     """
+    state.update_planted_crop_timers()
     game_state: GameState = game.get_game_state()
+    my_player: Player = game_state.get_my_player()
+    pos: Position = my_player.position
+
     logger.debug(
         f"[Turn {game_state.turn}] Feedback received from engine: {game_state.feedback}")
 
-    # Select your decision here!
-    my_player: Player = game_state.get_my_player()
-    pos: Position = my_player.position
-    logger.info(f"Currently at {my_player.position}")
-    # logger.debug(f"LENGHTLENGHTLENGHTLENGHT: {len(my_player.harvested_inventory)}")
-    # If we have something to sell that we harvested, then try to move towards the green grocer tiles
-    if state.waiting_for_plants:
+    for _, timer in state.planted_crops.items():
+        if timer <= 0:
+            state.mode = BotMode.HARVESTING
+
+    current_mode = state.mode
+    logger.debug(f"Move stage mode: {current_mode}")
+
+    market_dist = closest_market_position(pos).distance(pos)
+    if market_dist / my_player.max_movement >= 179-game_state.turn:
+        state.mode=BotMode.MOVING_TO_MARKET
+
+    if current_mode == BotMode.MOVING_TO_MARKET:
+        target_pos = closest_market_position(pos)
+        decision_pos = move_toward_tile(
+            pos, target_pos, my_player.max_movement)
+        if decision_pos == target_pos:
+            state.mode = BotMode.BUYING
+        return MoveDecision(decision_pos)
+    elif current_mode == BotMode.MOVING_TO_BAND or current_mode == BotMode.PLANTING:
+        target_y = game_state.tile_map.get_fertility_band_level(
+            target_type=TileType.F_BAND_MID, search_direction=-1)
+        if target_y == -1:
+            target_y = game_state.tile_map.get_fertility_band_level(
+                target_type=TileType.F_BAND_OUTER, search_direction=-1)
+            if target_y == -1:
+                target_y = 4
+        ideal_pos = Position(pos.x, target_y)
+        target_pos = get_nearest_fertile_area(
+            ideal_planting_pos=ideal_pos, my_player=my_player, game=game)
+        decision_pos = move_toward_tile(
+            pos, target_pos, my_player.max_movement)
+        if decision_pos == target_pos and game_state.tile_map.get_tile(decision_pos).type.value>=TileType.F_BAND_OUTER.value:
+            state.mode = BotMode.PLANTING
+        return MoveDecision(decision_pos)
+    elif current_mode == BotMode.HARVESTING:
+        for position, timer in state.planted_crops.items():
+            if timer > 0:
+                continue
+            target_pos = position
+            decision_pos = move_toward_tile(
+                pos, target_pos, my_player.max_movement)
+            return MoveDecision(decision_pos)
+        logger.debug(f"Error: In harvest mode with no timers set to 0")
+        if len(state.planted_crops) > 0:
+            state.mode = BotState.WAITING_FOR_PLANTS
+        else:
+            state.mode = BotState.MOVING_TO_MARKET
+        return MoveDecision(pos)
+    elif current_mode == BotMode.WAITING_FOR_PLANTS:
+        min_timer = 100
+        min_pos = pos
+        for position, timer in state.planted_crops.items():
+            if timer < min_timer:
+                min_timer = timer
+                min_pos = position
+        max_dist = 0
+        max_pos = pos
+        for loc in game_util.within_move_range(game_state,my_player,min_pos):
+            if loc.distance(min_pos)<=game_state.get_opponent_player().protection_radius:
+                continue
+            if loc.distance(pos)>=my_player.max_movement:
+                continue
+            if loc.distance(min_pos)>max_dist:
+                max_dist = loc.distance(min_pos)
+                max_pos = loc
+        return MoveDecision(max_pos)
+    else:
+        logger.debug(f"Error: Invalid bot mode {current_mode}")
+        return MoveDecision(pos)
+
+    '''
+    if state.waiting_for_plants or in_range_of_duchams(game_state):
         logger.debug("Waiting for plants to grow")
         decision = MoveDecision(pos)
     elif (not state.has_visited_grocer) or (len(my_player.harvested_inventory) > 0 or game_state.turn > 174):
         logger.debug(f"Moving towards green grocer")
         pos = move_toward_tile(pos, Position(
-            constants.BOARD_WIDTH // 2, 0), constants.MAX_MOVEMENT)
+            constants.BOARD_WIDTH // 2, 0), my_player.max_movement)
         decision = MoveDecision(pos)
     else:
         target_y = game_state.tile_map.get_fertility_band_level(
-            TileType.F_BAND_INNER)
+            target_type=TileType.F_BAND_MID, search_direction=-1)
+        if target_y == -1:
+            target_y = game_state.tile_map.get_fertility_band_level(
+                target_type=TileType.F_BAND_OUTER, search_direction=-1)
+            logger.debug(
+                f"No inner band found - Looking for outer band {target_y}")
+
         if target_y != -1 and len(my_player.seed_inventory) > 0:
             logger.debug("Moving towards fertile band")
-            pos = move_toward_tile(pos, Position(
-                pos.x, target_y), constants.MAX_MOVEMENT)
+            target_pos = get_nearest_fertile_area(Position(pos.x, target_y), my_player, game)
+            pos = move_toward_tile(pos, target_pos, my_player.max_movement)
             decision = MoveDecision(pos)
         else:
             logger.debug("Not moving")
@@ -108,7 +242,7 @@ def get_move_decision(game: Game) -> MoveDecision:
                 decision = MoveDecision(pos)
 
     logger.debug(f"[Turn {game_state.turn}] Sending MoveDecision: {decision}")
-    return decision
+    return decision'''
 
 
 def get_action_decision(game: Game) -> ActionDecision:
@@ -127,47 +261,109 @@ def get_action_decision(game: Game) -> ActionDecision:
 
     my_player: Player = game_state.get_my_player()
     pos: Position = my_player.position
-    seeds = sum(my_player.seed_inventory.values())
+    current_mode = state.mode
+    logger.debug(f"Action stage mode: {current_mode}")
+    seed_inventory = []
+    for seed_type, count in my_player.seed_inventory.items():
+        seed_inventory.extend([seed_type] * count)
+    seeds = len(seed_inventory)
+
+    if current_mode == BotMode.MOVING_TO_MARKET or current_mode == BotMode.MOVING_TO_BAND:
+        logger.debug(f"Moving to market or band - No actions to take.")
+        return DoNothingDecision()
     # Let the crop of focus be the one we have a seed for, if not just choose a random crop
-    crop = CropType.DUCHAM_FRUIT
+    if my_player.money >= 1000:
+        state.target_crop = CropType.GOLDEN_CORN
+        logger.debug(f"Crop of focus: {state.target_crop}")
+
+    if current_mode == BotMode.BUYING:
+        if game_state.turn > 170:
+            return DoNothingDecision()
+        state.mode = BotMode.MOVING_TO_BAND
+        return BuyDecision([state.target_crop], [min(my_player.carring_capacity,my_player.money // state.target_crop.get_seed_price())])
+    elif current_mode == BotMode.PLANTING:
+        all_possible_plant_locations = game_util.within_plant_range(game_state,my_player)
+        logger.debug(f"how many locs: {len(all_possible_plant_locations)}")
+        possible_plant_locations = []
+        for loc in all_possible_plant_locations:
+            if not is_unobstructed(loc, game):
+                continue
+            possible_plant_locations.append(loc)
+        
+        seeds_to_plant: list[CropType] = []
+        chosen_plant_locations: list[Position] = []
+        how_many_we_can_plant: int = min(seeds, len(possible_plant_locations))
+        logger.debug(f"How many we can plant: {how_many_we_can_plant}, {len(possible_plant_locations)}")
+        for i in range(how_many_we_can_plant):
+            seeds_to_plant.append(seed_inventory[i])
+            chosen_plant_locations.append(possible_plant_locations[i])
+            state.planted_crops[pos] = seed_inventory[i].get_growth_time()+1
+        if len(seeds_to_plant)==seeds:
+            state.mode = BotMode.WAITING_FOR_PLANTS
+        if how_many_we_can_plant==0:
+            state.mode = BotMode.MOVING_TO_BAND
+            return DoNothingDecision()
+        logger.debug(f"Planting {len(seeds_to_plant)} seeds")
+        return PlantDecision(seeds_to_plant, chosen_plant_locations)
+    else:
+        all_possible_harvest_locations = game_util.within_harvest_range(game_state,my_player)
+        possible_harvest_locations = []
+        for loc in all_possible_harvest_locations:
+            if game_state.tile_map.get_tile(loc).is_harvestable_crop(logger):
+                possible_harvest_locations.append(loc)
+        if len(possible_harvest_locations) == 0:
+            logger.debug(f"No crops to harvest")
+            return DoNothingDecision()
+        else:
+            logger.debug(f"Harvesting {len(possible_harvest_locations)} crops")
+            del state.planted_crops[pos]
+            if len(state.planted_crops) == 0:
+                if seeds == 0:
+                    state.mode = BotMode.MOVING_TO_MARKET
+                else:
+                    state.mode = BotMode.PLANTING
+            return HarvestDecision(possible_harvest_locations)
 
     # Get a list of possible harvest locations for our harvest radius
     possible_harvest_locations = []
-    for harvest_pos in game_util.within_harvest_range(game_state, my_player.name):
-        if game_state.tile_map.get_tile(harvest_pos).turns_left_to_grow == 0 \
+    for harvest_pos in game_util.within_harvest_range(game_state, my_player):
+        if game_state.tile_map.get_tile(harvest_pos).crop.growth_timer == 0 \
                 and game_state.tile_map.get_tile(harvest_pos).crop.value > 0:
             possible_harvest_locations.append(harvest_pos)
 
     # If we can harvest something, try to harvest it
     if len(possible_harvest_locations) > 0:
         state.waiting_for_plants = False
+        logger.debug(f"Harvesting {possible_harvest_locations}")
         return HarvestDecision(possible_harvest_locations)
     # If not but we have that seed, then try to plant it in an inner fertility band
     if game_state.tile_map.get_tile(pos).type.value > TileType.F_BAND_OUTER.value\
             and seeds > 0 and not state.waiting_for_plants:
         logger.debug(f"Deciding to try to plant at position {pos}")
-        possible_plant_locations: list[Position] = [Position(0, 0), Position(
+        all_possible_plant_locations: list[Position] = [Position(0, 0), Position(
             1, 0), Position(-1, 0), Position(0, 1), Position(0, -1)]
-        chosen_plant_locations: list[Position] = []
+        possible_plant_locations: list[Position] = []
         for i in range(seeds):
-            for j in possible_plant_locations:
+            for j in all_possible_plant_locations:
                 loc = pos + j
                 if not game_state.tile_map.valid_position(loc) or game_state.get_opponent_player().position.distance(loc) < 3:
-                    possible_plant_locations.remove(j)
+                    all_possible_plant_locations.remove(j)
                     continue
                 if game_state.tile_map.get_tile(loc).type.value > TileType.F_BAND_OUTER.value:
-                    chosen_plant_locations.append(loc)
-                    possible_plant_locations.remove(j)
+                    possible_plant_locations.append(loc)
+                    all_possible_plant_locations.remove(j)
                     break
         state.waiting_for_plants = True
-        return PlantDecision([crop]*len(chosen_plant_locations), chosen_plant_locations)
+        state.planted_crops[pos] = state.target_crop.get_growth_time()
+        return PlantDecision([state.target_crop]*len(possible_plant_locations), possible_plant_locations)
 
-    if my_player.money >= crop.get_seed_price() and \
-            game_state.tile_map.get_tile(pos).type == TileType.GREEN_GROCER:
+    if my_player.money >= state.target_crop.get_seed_price() and \
+            game_state.tile_map.get_tile(pos).type == TileType.GREEN_GROCER and \
+    game_state.turn < 166:
         logger.debug(
-            f"Buy as much as we can of {crop}")
+            f"Buy as much as we can of {state.target_crop}")
         state.has_visited_grocer = True
-        return BuyDecision([crop], [min(my_player.money // crop.get_seed_price(), 5-seeds)])
+        return BuyDecision([state.target_crop], [min(my_player.money // state.target_crop.get_seed_price(), 5-seeds)])
 
     logger.debug(f"Couldn't find anything to do, waiting for move step")
     return DoNothingDecision()
@@ -177,7 +373,7 @@ def main():
     """
     Competitor TODO: choose an item and upgrade for your bot
     """
-    game = Game(ItemType.COFFEE_THERMOS, UpgradeType.SCYTHE)
+    game = Game(ItemType.COFFEE_THERMOS, UpgradeType.LONGER_LEGS)
 
     while (True):
         try:
